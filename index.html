@@ -48,15 +48,14 @@
 <script>
 // Native WebSocket only — no Socket.io / React / build tools.
 
-// Resolve server URL: ?server=wss://xxx.onrender.com override,
-// localhost default for dev, same-host fallback for single-service deploys.
+// Resolve server URL: ?server=wss://xxx override,
+// localhost stays local, everything else (including file:// double-click)
+// defaults to the live Render backend.
 const params = new URLSearchParams(location.search);
 const WS_URL = params.get('server')
   || ((location.hostname === 'localhost' || location.hostname === '127.0.0.1')
     ? 'ws://localhost:8080'
-    : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-// ^ Deploy note: frontend on GitHub/Cloudflare Pages + backend on Render
-//   → open index.html as https://you.github.io/?server=wss://your-api.onrender.com
+    : 'wss://sundaysolution.onrender.com');
 
 const chat = document.getElementById('chat');
 const form = document.getElementById('form');
