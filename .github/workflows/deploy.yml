@@ -52,8 +52,8 @@ jobs:
           grep -q 'id="searchBtn"' index.html || (echo "search button missing" && exit 1)
           grep -q 'id="skipBtn"' index.html || (echo "skip button missing" && exit 1)
           grep -q 'username-required' index.html || (echo "username gate missing" && exit 1)
-          grep -q '?room=' index.html && (echo "stale private-link code still present" && exit 1)
-          grep -q "'Anonymous'" index.html server.js && (echo "Anonymous fallback still present" && exit 1)
+          if grep -q '?room=' index.html; then echo "stale private-link code still present" && exit 1; fi
+          if grep -q "'Anonymous'" index.html server.js; then echo "Anonymous fallback still present" && exit 1; fi
 
       - name: No secrets committed
         run: |
