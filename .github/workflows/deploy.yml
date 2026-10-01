@@ -1,0 +1,83 @@
+# Validates every push to main and deploys the static frontend to GitHub Pages.
+# Backend (server.js) deploys via Render Blueprint (render.yaml) — this workflow
+# proves the backend boots and passes the 1-on-1 room smoke test before Pages ships.
+name: Validate & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Check files are deployment-ready
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check backend
+        run: node --check server.js
+
+      - name: Required files present
+        run: |
+          test -f index.html || (echo "index.html missing" && exit 1)
+          test -f package.json || (echo "package.json missing" && exit 1)
+          test -f server.js || (echo "server.js missing" && exit 1)
+          test -f .nojekyll || (echo ".nojekyll missing (needed for Pages)" && exit 1)
+          test -f render.yaml || (echo "render.yaml missing" && exit 1)
+
+      - name: Frontend sanity checks
+        run: |
+          grep -q 'id="view-landing"' index.html || (echo "landing view missing" && exit 1)
+          grep -q 'id="view-room"' index.html || (echo "room view missing" && exit 1)
+          grep -q 'id="chat"' index.html || (echo "chat element missing" && exit 1)
+          grep -q '?room=' index.html || (echo "room-link handling missing" && exit 1)
+
+      - name: No secrets committed
+        run: |
+          if git ls-files | grep -x '.env'; then
+            echo ".env is tracked — it must stay local (see .env.example)" && exit 1
+          fi
+
+      - name: Backend smoke test (ephemeral 1-on-1 rooms)
+        run: npm test
+
+  deploy-pages:
+    name: Deploy frontend to GitHub Pages
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble static artifact
+        run: |
+          mkdir -p public
+          cp index.html public/
+          cp .nojekyll public/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

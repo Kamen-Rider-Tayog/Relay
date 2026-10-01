@@ -3,124 +3,212 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SundaySolution Chat</title>
-<style>
-  /* Pure CSS, no frameworks. Flexbox column layout, scrollable message area. */
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 16px; }
-  .app { width: 100%; max-width: 640px; background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.08); display: flex; flex-direction: column; height: calc(100vh - 32px); max-height: 800px; overflow: hidden; }
-  header { padding: 14px 16px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  header h1 { font-size: 1.1rem; flex: 1; }
-  /* Status dot: color driven by .online/.connecting classes on #status */
-  #status { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: #64748b; }
-  #status .dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
-  #status.online .dot { background: #22c55e; }
-  #status.connecting .dot { background: #f59e0b; animation: blink 1s infinite; }
-  @keyframes blink { 50% { opacity: .4; } }
-  #name { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; width: 150px; }
-  #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #f8fafc; }
-  /* Sent = right/blue, received = left/gray */
-  .msg { max-width: 75%; padding: 8px 12px; border-radius: 12px; line-height: 1.4; word-wrap: break-word; }
-  .msg.sent { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
-  .msg.received { align-self: flex-start; background: #e2e8f0; color: #0f172a; border-bottom-left-radius: 4px; }
-  .msg .meta { font-size: .68rem; opacity: .7; margin-bottom: 2px; }
-  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e2e8f0; }
-  #input { flex: 1; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; }
-  button { padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
-  button:disabled { background: #94a3b8; cursor: not-allowed; }
-</style>
+<title>Relay — one-time 1-on-1 chat</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body>
-<div class="app">
-  <header>
-    <h1>SundaySolution Chat</h1>
-    <div id="status" class="connecting"><span class="dot"></span><span id="statusText">Connecting…</span></div>
-    <!-- Display name set before chatting -->
-    <input id="name" placeholder="Display name" maxlength="32" autocomplete="username">
+<body class="bg-slate-100 min-h-screen flex justify-center p-4 font-sans">
+<div class="w-full max-w-xl bg-white rounded-2xl shadow-lg flex flex-col h-[calc(100vh-2rem)] max-h-[820px] overflow-hidden">
+
+  <header class="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
+    <h1 class="text-lg font-semibold flex-1">Relay</h1>
+    <span id="count" class="text-xs text-slate-500 hidden">1/2</span>
+    <div id="status" class="flex items-center gap-1.5 text-xs text-slate-500">
+      <span id="dot" class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+      <span id="statusText">Idle</span>
+    </div>
   </header>
-  <main id="chat" aria-live="polite"></main>
-  <form id="form">
-    <input id="input" placeholder="Type a message…" maxlength="2000" autocomplete="off">
-    <button id="send" type="submit" disabled>Send</button>
-  </form>
+
+  <!-- Landing: display name + create / paste link -->
+  <section id="view-landing" class="flex-1 flex flex-col justify-center gap-4 p-6">
+    <p class="text-sm text-slate-600">Private one-time chat. Share the link — it fits <b>2 people max</b> and <b>burns forever</b> when anyone leaves.</p>
+    <label class="text-sm font-medium">Your display name
+      <input id="name" placeholder="e.g. Alex" maxlength="32" autocomplete="username"
+        class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </label>
+    <button id="createBtn" class="w-full py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50">Create private link</button>
+    <div class="flex items-center gap-2 text-xs text-slate-400"><span class="flex-1 h-px bg-slate-200"></span>or<span class="flex-1 h-px bg-slate-200"></span></div>
+    <label class="text-sm font-medium">Paste a link to join
+      <div class="mt-1 flex gap-2">
+        <input id="joinInput" placeholder="https://…/?room=abc123" autocomplete="off"
+          class="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button id="joinBtn" class="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900">Join</button>
+      </div>
+    </label>
+  </section>
+
+  <!-- Room: share link + chat -->
+  <section id="view-room" class="hidden flex-1 flex-col overflow-hidden">
+    <div class="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+      <input id="linkBox" readonly class="flex-1 text-xs px-2 py-1.5 border border-slate-300 rounded-md bg-white text-slate-600 truncate">
+      <button id="copyBtn" class="text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700">Copy</button>
+      <button id="newBtn" class="text-xs px-3 py-1.5 rounded-md bg-slate-200 hover:bg-slate-300">New</button>
+    </div>
+    <div id="notice" class="hidden px-4 py-2 text-sm text-center"></div>
+    <main id="chat" aria-live="polite" class="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-slate-50"></main>
+    <form id="form" class="flex gap-2 p-3 border-t border-slate-200">
+      <input id="input" placeholder="Type a message…" maxlength="2000" autocomplete="off"
+        class="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <button id="send" type="submit" disabled class="px-5 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50 hover:bg-blue-700">Send</button>
+    </form>
+  </section>
 </div>
 
 <script>
-// Native WebSocket only — no Socket.io / React / build tools.
-
-// Resolve server URL: ?server=wss://xxx override,
-// localhost stays local, everything else (including file:// double-click)
-// defaults to the live Render backend.
+// Relay frontend: Vanilla JS + WebSocket only. Ephemeral rooms, no history.
 const params = new URLSearchParams(location.search);
+// TODO: after renaming the Render service, change this to wss://relay.onrender.com
+// ?server= override always wins (useful for local dev + migration).
+const DEFAULT_BACKEND = 'wss://sundaysolution.onrender.com';
 const WS_URL = params.get('server')
   || ((location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-    ? 'ws://localhost:8080'
-    : 'wss://sundaysolution.onrender.com');
+    ? `ws://${location.hostname}:8080`
+    : DEFAULT_BACKEND);
 
-const chat = document.getElementById('chat');
-const form = document.getElementById('form');
-const input = document.getElementById('input');
-const nameEl = document.getElementById('name');
-const sendBtn = document.getElementById('send');
-const statusEl = document.getElementById('status');
-const statusText = document.getElementById('statusText');
+const $ = (id) => document.getElementById(id);
+const viewLanding = $('view-landing'), viewRoom = $('view-room');
+const nameEl = $('name'), joinInput = $('joinInput');
+const chat = $('chat'), form = $('form'), input = $('input'), sendBtn = $('send');
+const statusText = $('statusText'), dot = $('dot'), countEl = $('count');
+const linkBox = $('linkBox'), notice = $('notice');
 
-nameEl.value = localStorage.getItem('chat-name') || '';
-nameEl.addEventListener('change', () => localStorage.setItem('chat-name', nameEl.value.trim()));
+nameEl.value = localStorage.getItem('relay-display-name') || localStorage.getItem('chat-name') || '';
+nameEl.addEventListener('change', () => localStorage.setItem('relay-display-name', nameEl.value.trim()));
 
-let ws = null, retryCount = 0;
+let ws = null, roomId = params.get('room') || null, live = false;
 
-function setStatus(state, label) {
-  statusEl.className = state; // '' | 'connecting' | 'online' → drives dot color
-  statusText.textContent = label;
-  sendBtn.disabled = state !== 'online';
+function displayName() {
+  return (nameEl.value.trim() || localStorage.getItem('relay-display-name') || '').trim() || 'Anonymous';
 }
+
+function setStatus(label, color) {
+  statusText.textContent = label;
+  dot.className = `w-2.5 h-2.5 rounded-full inline-block ${color}`;
+  sendBtn.disabled = !live;
+}
+
+function showRoom() {
+  viewLanding.classList.add('hidden');
+  viewRoom.classList.remove('hidden');
+  viewRoom.classList.add('flex');
+  const link = `${location.origin}${location.pathname}?room=${roomId}`;
+  linkBox.value = link;
+  countEl.classList.remove('hidden');
+}
+
+function showNotice(msg, bad) {
+  notice.textContent = msg;
+  notice.className = `px-4 py-2 text-sm text-center ${bad ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`;
+  notice.classList.remove('hidden');
+}
+
+function setCount(n) { countEl.textContent = `${n}/2`; }
 
 function addMessage({ username, text, timestamp }) {
-  const isMine = (username || '') === (nameEl.value.trim() || 'Anonymous');
+  const mine = (username || '') === displayName();
   const div = document.createElement('div');
-  div.className = 'msg ' + (isMine ? 'sent' : 'received');
-  // textContent (not innerHTML) prevents XSS from other chatters.
+  div.className = `max-w-[75%] px-3 py-2 rounded-xl leading-snug break-words ${mine ? 'self-end bg-blue-600 text-white rounded-br-sm' : 'self-start bg-slate-200 text-slate-900 rounded-bl-sm'}`;
   const meta = document.createElement('div');
-  meta.className = 'meta';
+  meta.className = 'text-[0.68rem] opacity-70 mb-0.5';
   meta.textContent = `${username} · ${new Date(timestamp).toLocaleTimeString()}`;
   const body = document.createElement('div');
-  body.textContent = text;
+  body.textContent = text; // textContent, never innerHTML — peers are untrusted
   div.append(meta, body);
   chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight; // auto-scroll to newest
+  chat.scrollTop = chat.scrollHeight;
 }
 
-function connect() {
-  setStatus('connecting', 'Connecting…');
+function connect(mode) {
+  setStatus('Connecting…', 'bg-amber-500 animate-pulse');
   ws = new WebSocket(WS_URL);
 
-  ws.onopen = () => { retryCount = 0; setStatus('online', 'Connected'); };
-  ws.onmessage = (e) => { try { addMessage(JSON.parse(e.data)); } catch {} };
-  ws.onclose = () => {
-    // Reconnect loop with exponential backoff (caps at 10s).
-    // Handles Render free-tier 15-min spin-down: first retry wakes the server.
-    setStatus('', 'Disconnected — retrying…');
-    const delay = Math.min(1000 * 2 ** retryCount++, 10000);
-    setTimeout(connect, delay || 3000);
+  ws.onopen = () => {
+    if (mode === 'create') ws.send(JSON.stringify({ type: 'create', username: displayName() }));
+    else ws.send(JSON.stringify({ type: 'join', roomId, username: displayName() }));
   };
-  ws.onerror = () => ws.close(); // let onclose drive the retry
+
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === 'created') {
+      roomId = m.roomId;
+      history.replaceState(null, '', `?room=${roomId}`);
+      showRoom();
+      setCount(1);
+      setStatus('Waiting for peer… 1/2', 'bg-amber-500');
+      showNotice('Share the link above. It burns forever once anyone leaves.');
+    } else if (m.type === 'joined') {
+      showRoom();
+      setCount(m.count);
+      live = m.count === 2;
+      setStatus(live ? 'Connected 2/2' : 'Waiting for peer… 1/2', live ? 'bg-green-500' : 'bg-amber-500');
+    } else if (m.type === 'peer-joined') {
+      setCount(m.count);
+      live = true;
+      setStatus('Connected 2/2', 'bg-green-500');
+      showNotice('Peer joined. This link now accepts no one else.');
+    } else if (m.type === 'peer-left') {
+      live = false;
+      setStatus('Burned', 'bg-red-500');
+      setCount(2);
+      showNotice('Chat over — link is permanently burned. Create a new one.', true);
+    } else if (m.type === 'room-full') {
+      live = false;
+      setStatus('Disabled', 'bg-red-500');
+      showNotice('This link already has 2 people — it is disabled.', true);
+    } else if (m.type === 'link-disabled') {
+      live = false;
+      setStatus('Disabled', 'bg-red-500');
+      showNotice('This link is burned or invalid. Ask for a fresh one.', true);
+    } else if (m.type === 'chat') {
+      addMessage(m);
+    }
+  };
+
+  // No auto-reconnect: one-time links must not resurrect after burn.
+  ws.onclose = () => { if (live) { live = false; setStatus('Disconnected', 'bg-red-500'); } };
+  ws.onerror = () => { try { ws.close(); } catch {} };
 }
+
+$('createBtn').onclick = () => {
+  localStorage.setItem('relay-display-name', nameEl.value.trim());
+  roomId = null;
+  connect('create');
+};
+
+$('joinBtn').onclick = () => {
+  const v = joinInput.value.trim();
+  const m = v.match(/[?&]room=([0-9a-f]{8,64})/i) || v.match(/^([0-9a-f]{8,64})$/i);
+  const id = m ? m[1] : null;
+  if (!id) { alert('Paste a valid Relay link (…?room=…)'); return; }
+  roomId = id;
+  localStorage.setItem('relay-display-name', nameEl.value.trim());
+  history.replaceState(null, '', `?room=${roomId}`);
+  connect('join');
+};
+
+$('copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(linkBox.value); $('copyBtn').textContent = 'Copied!'; }
+  catch { linkBox.select(); document.execCommand('copy'); }
+  setTimeout(() => ($('copyBtn').textContent = 'Copy'), 1500);
+};
+
+$('newBtn').onclick = () => {
+  try { ws && ws.close(); } catch {}
+  location.href = location.pathname; // drop ?room=, back to landing
+};
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({
-    username: nameEl.value.trim() || 'Anonymous',
-    text,
-    timestamp: new Date().toISOString(),
-  }));
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN || !live) return;
+  ws.send(JSON.stringify({ type: 'message', text }));
   input.value = '';
   input.focus();
 });
 
-connect();
+// Deep link: ?room=xxx joins directly.
+if (roomId) connect('join');
+else setStatus('Idle', 'bg-slate-400');
 </script>
 </body>
 </html>

@@ -1,0 +1,14 @@
+# Relay backend — Render free-tier WebSocket service.
+# Connect this repo in Render (Blueprint) and it auto-deploys on push to main.
+# The frontend (index.html) is deployed separately via GitHub Pages in deploy.yml.
+services:
+  - type: web
+    name: relay
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: ~22
