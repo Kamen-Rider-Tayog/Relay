@@ -1,6 +1,7 @@
-// Relay — ephemeral one-on-one chat relay.
-// Rules: unique one-time link, max 2 people per link, link burns permanently
-// on first disconnect (no rejoin/reuse). No persistence by design.
+// Relay — Omegle-style ephemeral 1-on-1 stranger chat.
+// Rules: username required (no anonymous), random matching via Search,
+// Skip finds the next stranger automatically, every pairing burns
+// permanently on leave/disconnect (no rejoin). No persistence by design.
 require('dotenv').config();
 
 const crypto = require('crypto');
@@ -11,34 +12,75 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 
-// roomId -> Set<ws>. Ephemeral: lives only in memory.
+// roomId -> Set<ws>. Internal only — IDs are never sent to clients,
+// so a burned pairing is unrecoverable by design.
 const rooms = new Map();
-// Permanently burned links — never reusable, even after room is deleted.
-const burned = new Set();
-
-function newRoomId() {
-  return crypto.randomBytes(8).toString('hex');
-}
+// FIFO queue of sockets waiting for a stranger.
+const waiting = [];
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
-// Burn a room forever: notify the surviving peer, then drop all state.
-function burnRoom(roomId, reason) {
-  if (!roomId || burned.has(roomId)) return;
-  burned.add(roomId);
-  const peers = rooms.get(roomId);
-  rooms.delete(roomId);
-  if (peers) {
-    for (const peer of peers) {
-      send(peer, { type: 'peer-left', reason });
-      // Give the client a beat to render the notice, then drop the socket.
-      setTimeout(() => { try { peer.close(4000, 'burned'); } catch {} }, 300);
-      peer.roomId = null;
-    }
+// Username is mandatory everywhere — returns null when missing/blank.
+function cleanUsername(value) {
+  const name = String(value || '').trim().slice(0, 32);
+  return name || null;
+}
+
+function isInQueue(ws) {
+  return waiting.includes(ws);
+}
+
+function removeFromQueue(ws) {
+  const i = waiting.indexOf(ws);
+  if (i !== -1) waiting.splice(i, 1);
+}
+
+// Live lobby stats for the landing screen.
+function broadcastStats() {
+  const payload = JSON.stringify({
+    type: 'stats',
+    online: wss.clients.size,
+    searching: waiting.length,
+  });
+  for (const client of wss.clients) {
+    if (client.readyState === 1) client.send(payload);
   }
-  console.log(`[x] burned ${roomId} (${reason}), ${burned.size} burned total`);
+}
+
+// Pair two waiters into a fresh ephemeral room.
+function tryMatch() {
+  while (waiting.length >= 2) {
+    const a = waiting.shift();
+    const b = waiting.shift();
+    if (a.readyState !== 1 || b.readyState !== 1) {
+      // Drop dead sockets, re-queue the live one if any.
+      if (a.readyState === 1 && !a.roomId) waiting.unshift(a);
+      if (b.readyState === 1 && !b.roomId) waiting.unshift(b);
+      continue;
+    }
+    const roomId = crypto.randomBytes(8).toString('hex');
+    rooms.set(roomId, new Set([a, b]));
+    a.roomId = roomId;
+    b.roomId = roomId;
+    console.log(`[+] matched ${a.username} <> ${b.username} (${roomId})`);
+    send(a, { type: 'matched', peer: b.username, count: 2 });
+    send(b, { type: 'matched', peer: a.username, count: 2 });
+  }
+  broadcastStats();
+}
+
+// Burn a pairing forever: delete it, notify the survivor (if any).
+// reason: 'skipped' (peer pressed Next) or 'left' (peer disconnected).
+function burnRoom(roomId, survivor, reason) {
+  if (!roomId) return;
+  rooms.delete(roomId);
+  if (survivor && survivor.readyState === 1) {
+    send(survivor, { type: reason === 'skipped' ? 'peer-skipped' : 'peer-left' });
+    survivor.roomId = null;
+  }
+  broadcastStats();
 }
 
 function serveIndex(res) {
@@ -68,57 +110,85 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
   ws.roomId = null;
   ws.username = null;
+  broadcastStats();
 
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
 
-    if (msg.type === 'create') {
-      if (ws.roomId) return; // already in a room
-      const roomId = newRoomId();
-      const username = String(msg.username || 'Anonymous').slice(0, 32) || 'Anonymous';
-      rooms.set(roomId, new Set([ws]));
-      ws.roomId = roomId;
+    // --- Search for a random stranger ---------------------------------
+    if (msg.type === 'search') {
+      const username = cleanUsername(msg.username);
+      if (!username) { send(ws, { type: 'username-required' }); return; }
+      if (ws.roomId) { send(ws, { type: 'already-in-chat' }); return; }
+      if (isInQueue(ws)) { send(ws, { type: 'searching' }); return; }
       ws.username = username;
-      console.log(`[+] room ${roomId} created by ${username}`);
-      send(ws, { type: 'created', roomId, count: 1 });
+      waiting.push(ws);
+      console.log(`[?] ${username} searching (${waiting.length} waiting)`);
+      send(ws, { type: 'searching' });
+      tryMatch();
       return;
     }
 
-    if (msg.type === 'join') {
-      if (ws.roomId) return;
-      const roomId = String(msg.roomId || '').trim();
-      const username = String(msg.username || 'Anonymous').slice(0, 32) || 'Anonymous';
-      if (!roomId || burned.has(roomId) || !rooms.has(roomId)) {
-        send(ws, { type: 'link-disabled' });
-        setTimeout(() => { try { ws.close(4001, 'disabled'); } catch {} }, 300);
-        return;
-      }
-      const peers = rooms.get(roomId);
-      if (peers.size >= 2) {
-        send(ws, { type: 'room-full' });
-        setTimeout(() => { try { ws.close(4002, 'full'); } catch {} }, 300);
-        return;
-      }
-      peers.add(ws);
-      ws.roomId = roomId;
+    // --- Skip: burn current chat, auto-search for the next stranger ---
+    if (msg.type === 'next') {
+      const username = cleanUsername(msg.username || ws.username);
+      if (!username) { send(ws, { type: 'username-required' }); return; }
       ws.username = username;
-      console.log(`[+] ${username} joined ${roomId} (${peers.size}/2)`);
-      send(ws, { type: 'joined', roomId, count: peers.size });
-      for (const peer of peers) {
-        if (peer !== ws) send(peer, { type: 'peer-joined', count: peers.size });
+      if (ws.roomId) {
+        const roomId = ws.roomId;
+        const peers = rooms.get(roomId) || new Set();
+        let survivor = null;
+        for (const peer of peers) {
+          if (peer !== ws) survivor = peer;
+        }
+        ws.roomId = null;
+        console.log(`[>] ${username} skipped (${roomId})`);
+        burnRoom(roomId, survivor, 'skipped');
       }
+      removeFromQueue(ws); // de-dupe in case of double-clicks
+      if (!isInQueue(ws)) waiting.push(ws);
+      send(ws, { type: 'searching' });
+      tryMatch();
       return;
     }
 
+    // --- Leave current chat without searching again ------------------------
+    if (msg.type === 'leave') {
+      removeFromQueue(ws);
+      if (ws.roomId) {
+        const roomId = ws.roomId;
+        const peers = rooms.get(roomId) || new Set();
+        let survivor = null;
+        for (const peer of peers) {
+          if (peer !== ws) survivor = peer;
+        }
+        ws.roomId = null;
+        console.log(`[-] ${ws.username || '?'} left (${roomId})`);
+        burnRoom(roomId, survivor, 'left');
+      }
+      send(ws, { type: 'cancelled' });
+      return;
+    }
+
+    // --- Cancel an ongoing search --------------------------------------
+    if (msg.type === 'cancel') {
+      removeFromQueue(ws);
+      send(ws, { type: 'cancelled' });
+      broadcastStats();
+      return;
+    }
+
+    // --- Chat message (paired rooms only) -------------------------------
     if (msg.type === 'message') {
       if (!ws.roomId || !rooms.has(ws.roomId)) return;
+      if (!ws.username) return; // must have a validated name
       const text = String(msg.text || '');
       if (!text.trim() || text.length > 2000) return;
       const out = JSON.stringify({
         type: 'chat',
-        username: ws.username || 'Anonymous',
+        username: ws.username,
         text: text.slice(0, 2000),
         timestamp: new Date().toISOString(),
       });
@@ -130,10 +200,23 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    // ANY disconnect burns the one-time link permanently — no rejoin.
-    if (ws.roomId) burnRoom(ws.roomId, 'peer disconnected');
+    removeFromQueue(ws);
+    // ANY disconnect burns the pairing permanently — no rejoin.
+    if (ws.roomId) {
+      const roomId = ws.roomId;
+      const peers = rooms.get(roomId) || new Set();
+      let survivor = null;
+      for (const peer of peers) {
+        if (peer !== ws) survivor = peer;
+      }
+      ws.roomId = null;
+      console.log(`[x] ${ws.username || '?'} disconnected, burned ${roomId}`);
+      burnRoom(roomId, survivor, 'left');
+    } else {
+      broadcastStats();
+    }
   });
   ws.on('error', (err) => console.error('[!] socket error:', err.message));
 });
 
-server.listen(PORT, () => console.log(`Relay listening on :${PORT}`));
+server.listen(PORT, () => console.log(`Relay stranger-chat listening on :${PORT}`));

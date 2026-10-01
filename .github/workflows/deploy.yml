@@ -1,6 +1,6 @@
 # Validates every push to main and deploys the static frontend to GitHub Pages.
 # Backend (server.js) deploys via Render Blueprint (render.yaml) — this workflow
-# proves the backend boots and passes the 1-on-1 room smoke test before Pages ships.
+# proves the backend boots and passes the stranger-chat smoke test before Pages ships.
 name: Validate & Deploy
 
 on:
@@ -46,9 +46,14 @@ jobs:
       - name: Frontend sanity checks
         run: |
           grep -q 'id="view-landing"' index.html || (echo "landing view missing" && exit 1)
-          grep -q 'id="view-room"' index.html || (echo "room view missing" && exit 1)
+          grep -q 'id="view-searching"' index.html || (echo "searching view missing" && exit 1)
+          grep -q 'id="view-chat"' index.html || (echo "chat view missing" && exit 1)
           grep -q 'id="chat"' index.html || (echo "chat element missing" && exit 1)
-          grep -q '?room=' index.html || (echo "room-link handling missing" && exit 1)
+          grep -q 'id="searchBtn"' index.html || (echo "search button missing" && exit 1)
+          grep -q 'id="skipBtn"' index.html || (echo "skip button missing" && exit 1)
+          grep -q 'username-required' index.html || (echo "username gate missing" && exit 1)
+          grep -q '?room=' index.html && (echo "stale private-link code still present" && exit 1)
+          grep -q "'Anonymous'" index.html server.js && (echo "Anonymous fallback still present" && exit 1)
 
       - name: No secrets committed
         run: |
@@ -56,7 +61,7 @@ jobs:
             echo ".env is tracked — it must stay local (see .env.example)" && exit 1
           fi
 
-      - name: Backend smoke test (ephemeral 1-on-1 rooms)
+      - name: Backend smoke test (random stranger matching)
         run: npm test
 
   deploy-pages:

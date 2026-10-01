@@ -1,5 +1,5 @@
 // Smoke test: boots server.js on a test port and verifies the
-// one-time 1-on-1 room lifecycle. Run with `npm test`.
+// Omegle-style stranger-chat lifecycle. Run with `npm test`.
 const { spawn } = require('child_process');
 const path = require('path');
 const WebSocket = require('ws');
@@ -64,21 +64,25 @@ function openSocket() {
     await waitForHealth();
     console.log('health check: ok');
 
+    // 1. Username is required — blank search is rejected, socket survives.
+    const anon = track(await openSocket());
+    anon.send(JSON.stringify({ type: 'search', username: '   ' }));
+    await onceType(anon, 'username-required');
+    console.log('username required (blank rejected): ok');
+
+    // 2. Two searchers pair up and see each other's names.
     const a = track(await openSocket());
-    a.send(JSON.stringify({ type: 'create', username: 'Alice' }));
-    const created = await onceType(a, 'created');
-    if (!created.roomId) throw new Error('create did not return roomId');
-    console.log(`create room: ok (${created.roomId})`);
-    const roomId = created.roomId;
-
     const b = track(await openSocket());
-    const peerJoinedP = onceType(a, 'peer-joined');
-    b.send(JSON.stringify({ type: 'join', roomId, username: 'Bob' }));
-    const joined = await onceType(b, 'joined');
-    if (joined.count !== 2) throw new Error(`expected count 2, got ${joined.count}`);
-    await peerJoinedP;
-    console.log('join as 2nd person: ok (2/2)');
+    a.send(JSON.stringify({ type: 'search', username: 'Alice' }));
+    await onceType(a, 'searching');
+    b.send(JSON.stringify({ type: 'search', username: 'Bob' }));
+    const [matchA, matchB] = await Promise.all([onceType(a, 'matched'), onceType(b, 'matched')]);
+    if (matchA.peer !== 'Bob' || matchB.peer !== 'Alice') {
+      throw new Error(`peer names wrong: ${matchA.peer} / ${matchB.peer}`);
+    }
+    console.log('random match with visible names: ok');
 
+    // 3. Message relay within the pairing.
     const chatP = onceType(b, 'chat');
     a.send(JSON.stringify({ type: 'message', text: 'hello bob' }));
     const chat = await chatP;
@@ -87,25 +91,42 @@ function openSocket() {
     }
     console.log('message relay: ok');
 
+    // 4. A third searcher waits unpaired while the pair is busy.
     const c = track(await openSocket());
-    c.send(JSON.stringify({ type: 'join', roomId, username: 'Eve' }));
-    await onceType(c, 'room-full');
-    console.log('3rd person rejected (room-full): ok');
-    c.close();
+    c.send(JSON.stringify({ type: 'search', username: 'Cara' }));
+    await onceType(c, 'searching');
+    await wait(500);
+    console.log('3rd searcher waits (no steal): ok');
 
-    const peerLeftP = onceType(a, 'peer-left');
-    b.close();
-    await peerLeftP;
-    console.log('burn on disconnect (peer-left): ok');
-    await wait(800); // allow server to finish burning the link
+    // 5. Skip: Alice auto-repairs with waiting Cara, Bob gets peer-skipped.
+    const skippedP = onceType(b, 'peer-skipped');
+    const rematchP = onceType(a, 'matched');
+    const caraMatchP = onceType(c, 'matched');
+    a.send(JSON.stringify({ type: 'next', username: 'Alice' }));
+    const [rematch, caraMatch] = await Promise.all([rematchP, caraMatchP]);
+    await skippedP;
+    if (rematch.peer !== 'Cara' || caraMatch.peer !== 'Alice') {
+      throw new Error(`skip rematch wrong: ${rematch.peer} / ${caraMatch.peer}`);
+    }
+    console.log('skip auto-matches next stranger, survivor notified: ok');
 
-    const d = track(await openSocket());
-    d.send(JSON.stringify({ type: 'join', roomId, username: 'Zed' }));
-    await onceType(d, 'link-disabled');
-    console.log('rejoin after burn rejected (link-disabled): ok');
-    d.close();
+    // 6. Disconnect burns the pairing permanently for the survivor.
+    const leftP = onceType(c, 'peer-left');
     a.close();
+    await leftP;
+    console.log('burn on disconnect (peer-left): ok');
 
+    // 7. Lobby stats are broadcast.
+    const statsP = onceType(c, 'stats');
+    const d = track(await openSocket());
+    const stats = await statsP;
+    if (typeof stats.online !== 'number' || typeof stats.searching !== 'number') {
+      throw new Error('stats shape wrong');
+    }
+    console.log(`lobby stats broadcast: ok (${stats.online} online)`);
+    d.close();
+
+    anon.close(); b.close(); c.close();
     console.log('SMOKE_PASSED');
   } catch (err) {
     failed = err;

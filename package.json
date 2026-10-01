@@ -1,7 +1,7 @@
 {
   "name": "relay",
   "version": "1.0.0",
-  "description": "Ephemeral one-on-one chat: unique one-time links, max 2 people, burn on disconnect",
+  "description": "Ephemeral random 1-on-1 stranger chat: username required, Search to match, Skip for next, burn on leave",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

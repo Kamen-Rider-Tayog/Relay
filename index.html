@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Relay — one-time 1-on-1 chat</title>
+<title>Relay — random 1-on-1 stranger chat</title>
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
 <body class="bg-slate-100 min-h-screen flex justify-center p-4 font-sans">
@@ -11,37 +11,37 @@
 
   <header class="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
     <h1 class="text-lg font-semibold flex-1">Relay</h1>
-    <span id="count" class="text-xs text-slate-500 hidden">1/2</span>
+    <span id="stats" class="text-xs text-slate-500">0 online</span>
     <div id="status" class="flex items-center gap-1.5 text-xs text-slate-500">
-      <span id="dot" class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+      <span id="dot" class="w-2.5 h-2.5 rounded-full bg-slate-400 inline-block"></span>
       <span id="statusText">Idle</span>
     </div>
   </header>
 
-  <!-- Landing: display name + create / paste link -->
+  <!-- Landing: required display name + search -->
   <section id="view-landing" class="flex-1 flex flex-col justify-center gap-4 p-6">
-    <p class="text-sm text-slate-600">Private one-time chat. Share the link — it fits <b>2 people max</b> and <b>burns forever</b> when anyone leaves.</p>
-    <label class="text-sm font-medium">Your display name
-      <input id="name" placeholder="e.g. Alex" maxlength="32" autocomplete="username"
+    <p class="text-sm text-slate-600">Random 1-on-1 stranger chat. Press <b>Search</b> to connect — <b>Skip</b> jumps to the next stranger. Chats burn forever when anyone leaves.</p>
+    <label class="text-sm font-medium">Your display name (required)
+      <input id="name" placeholder="e.g. Alex" maxlength="32" autocomplete="username" required
         class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
     </label>
-    <button id="createBtn" class="w-full py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50">Create private link</button>
-    <div class="flex items-center gap-2 text-xs text-slate-400"><span class="flex-1 h-px bg-slate-200"></span>or<span class="flex-1 h-px bg-slate-200"></span></div>
-    <label class="text-sm font-medium">Paste a link to join
-      <div class="mt-1 flex gap-2">
-        <input id="joinInput" placeholder="https://…/?room=abc123" autocomplete="off"
-          class="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <button id="joinBtn" class="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900">Join</button>
-      </div>
-    </label>
+    <p id="nameError" class="hidden text-sm text-red-600">Please enter a display name first.</p>
+    <button id="searchBtn" disabled class="w-full py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50">Search for a stranger</button>
   </section>
 
-  <!-- Room: share link + chat -->
-  <section id="view-room" class="hidden flex-1 flex-col overflow-hidden">
+  <!-- Searching -->
+  <section id="view-searching" class="hidden flex-1 flex-col items-center justify-center gap-4 p-6">
+    <div class="w-10 h-10 rounded-full border-4 border-slate-200 border-t-blue-600 animate-spin"></div>
+    <p class="text-sm text-slate-600">Looking for a stranger…</p>
+    <button id="cancelBtn" class="px-4 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-sm">Cancel</button>
+  </section>
+
+  <!-- Chat -->
+  <section id="view-chat" class="hidden flex-1 flex-col overflow-hidden">
     <div class="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
-      <input id="linkBox" readonly class="flex-1 text-xs px-2 py-1.5 border border-slate-300 rounded-md bg-white text-slate-600 truncate">
-      <button id="copyBtn" class="text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700">Copy</button>
-      <button id="newBtn" class="text-xs px-3 py-1.5 rounded-md bg-slate-200 hover:bg-slate-300">New</button>
+      <span id="peerLabel" class="flex-1 text-sm font-medium truncate">Stranger</span>
+      <button id="skipBtn" class="text-xs px-3 py-1.5 rounded-md bg-amber-500 text-white hover:bg-amber-600">Skip / Next</button>
+      <button id="leaveBtn" class="text-xs px-3 py-1.5 rounded-md bg-slate-200 hover:bg-slate-300">Leave</button>
     </div>
     <div id="notice" class="hidden px-4 py-2 text-sm text-center"></div>
     <main id="chat" aria-live="polite" class="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-slate-50"></main>
@@ -54,7 +54,7 @@
 </div>
 
 <script>
-// Relay frontend: Vanilla JS + WebSocket only. Ephemeral rooms, no history.
+// Relay frontend: Vanilla JS + WebSocket only. Random stranger matching, no history.
 const params = new URLSearchParams(location.search);
 // TODO: after renaming the Render service, change this to wss://relay.onrender.com
 // ?server= override always wins (useful for local dev + migration).
@@ -65,34 +65,63 @@ const WS_URL = params.get('server')
     : DEFAULT_BACKEND);
 
 const $ = (id) => document.getElementById(id);
-const viewLanding = $('view-landing'), viewRoom = $('view-room');
-const nameEl = $('name'), joinInput = $('joinInput');
+const viewLanding = $('view-landing'), viewSearching = $('view-searching'), viewChat = $('view-chat');
+const nameEl = $('name'), nameError = $('nameError'), searchBtn = $('searchBtn');
+const statsEl = $('stats'), peerLabel = $('peerLabel'), notice = $('notice');
 const chat = $('chat'), form = $('form'), input = $('input'), sendBtn = $('send');
-const statusText = $('statusText'), dot = $('dot'), countEl = $('count');
-const linkBox = $('linkBox'), notice = $('notice');
+const statusText = $('statusText'), dot = $('dot');
 
-nameEl.value = localStorage.getItem('relay-display-name') || localStorage.getItem('chat-name') || '';
-nameEl.addEventListener('change', () => localStorage.setItem('relay-display-name', nameEl.value.trim()));
+nameEl.value = localStorage.getItem('relay-display-name') || '';
+// Single persistent socket for the whole session (search → chat → skip → …).
+let ws = null, connected = false, state = 'idle'; // idle | searching | chatting
 
-let ws = null, roomId = params.get('room') || null, live = false;
+function username() {
+  return (nameEl.value.trim() || '').slice(0, 32);
+}
 
-function displayName() {
-  return (nameEl.value.trim() || localStorage.getItem('relay-display-name') || '').trim() || 'Anonymous';
+function refreshUI() {
+  const hasName = username().length > 0;
+  nameError.classList.toggle('hidden', hasName || state !== 'idle');
+  // Name is required: search only from landing with a name + open socket.
+  searchBtn.disabled = !(connected && hasName && state === 'idle');
+  nameEl.disabled = state !== 'idle';
+  sendBtn.disabled = state !== 'chatting';
 }
 
 function setStatus(label, color) {
   statusText.textContent = label;
   dot.className = `w-2.5 h-2.5 rounded-full inline-block ${color}`;
-  sendBtn.disabled = !live;
 }
 
-function showRoom() {
-  viewLanding.classList.add('hidden');
-  viewRoom.classList.remove('hidden');
-  viewRoom.classList.add('flex');
-  const link = `${location.origin}${location.pathname}?room=${roomId}`;
-  linkBox.value = link;
-  countEl.classList.remove('hidden');
+function showOnly(view) {
+  for (const v of [viewLanding, viewSearching, viewChat]) v.classList.add('hidden');
+  view.classList.remove('hidden');
+}
+
+function showLanding() {
+  state = 'idle';
+  setStatus(connected ? 'Idle' : 'Connecting…', connected ? 'bg-slate-400' : 'bg-amber-500 animate-pulse');
+  showOnly(viewLanding);
+  refreshUI();
+}
+
+function showSearching() {
+  state = 'searching';
+  setStatus('Searching…', 'bg-amber-500 animate-pulse');
+  showOnly(viewSearching);
+  viewSearching.classList.add('flex');
+  refreshUI();
+}
+
+function showChat(peer) {
+  state = 'chatting';
+  setStatus(`Chatting with ${peer}`, 'bg-green-500');
+  peerLabel.textContent = `Stranger: ${peer}`;
+  notice.classList.add('hidden');
+  showOnly(viewChat);
+  viewChat.classList.add('flex');
+  refreshUI();
+  input.focus();
 }
 
 function showNotice(msg, bad) {
@@ -101,114 +130,114 @@ function showNotice(msg, bad) {
   notice.classList.remove('hidden');
 }
 
-function setCount(n) { countEl.textContent = `${n}/2`; }
-
-function addMessage({ username, text, timestamp }) {
-  const mine = (username || '') === displayName();
+function addMessage({ username: from, text, timestamp }) {
+  const mine = from === username();
   const div = document.createElement('div');
   div.className = `max-w-[75%] px-3 py-2 rounded-xl leading-snug break-words ${mine ? 'self-end bg-blue-600 text-white rounded-br-sm' : 'self-start bg-slate-200 text-slate-900 rounded-bl-sm'}`;
   const meta = document.createElement('div');
   meta.className = 'text-[0.68rem] opacity-70 mb-0.5';
-  meta.textContent = `${username} · ${new Date(timestamp).toLocaleTimeString()}`;
+  meta.textContent = `${from} · ${new Date(timestamp).toLocaleTimeString()}`;
   const body = document.createElement('div');
-  body.textContent = text; // textContent, never innerHTML — peers are untrusted
+  body.textContent = text; // textContent, never innerHTML — strangers are untrusted
   div.append(meta, body);
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
 }
 
-function connect(mode) {
+function connect() {
   setStatus('Connecting…', 'bg-amber-500 animate-pulse');
   ws = new WebSocket(WS_URL);
 
-  ws.onopen = () => {
-    if (mode === 'create') ws.send(JSON.stringify({ type: 'create', username: displayName() }));
-    else ws.send(JSON.stringify({ type: 'join', roomId, username: displayName() }));
-  };
+  ws.onopen = () => { connected = true; if (state === 'idle') showLanding(); refreshUI(); };
 
   ws.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === 'created') {
-      roomId = m.roomId;
-      history.replaceState(null, '', `?room=${roomId}`);
-      showRoom();
-      setCount(1);
-      setStatus('Waiting for peer… 1/2', 'bg-amber-500');
-      showNotice('Share the link above. It burns forever once anyone leaves.');
-    } else if (m.type === 'joined') {
-      showRoom();
-      setCount(m.count);
-      live = m.count === 2;
-      setStatus(live ? 'Connected 2/2' : 'Waiting for peer… 1/2', live ? 'bg-green-500' : 'bg-amber-500');
-    } else if (m.type === 'peer-joined') {
-      setCount(m.count);
-      live = true;
-      setStatus('Connected 2/2', 'bg-green-500');
-      showNotice('Peer joined. This link now accepts no one else.');
+    if (m.type === 'stats') {
+      statsEl.textContent = `${m.online} online · ${m.searching} searching`;
+    } else if (m.type === 'searching') {
+      showSearching();
+    } else if (m.type === 'matched') {
+      chat.innerHTML = '';
+      showChat(m.peer);
+    } else if (m.type === 'peer-skipped') {
+      state = 'idle';
+      setStatus('Skipped', 'bg-red-500');
+      showNotice('Stranger skipped. Press Search to find someone new.', true);
+      sendBtn.disabled = true;
     } else if (m.type === 'peer-left') {
-      live = false;
-      setStatus('Burned', 'bg-red-500');
-      setCount(2);
-      showNotice('Chat over — link is permanently burned. Create a new one.', true);
-    } else if (m.type === 'room-full') {
-      live = false;
-      setStatus('Disabled', 'bg-red-500');
-      showNotice('This link already has 2 people — it is disabled.', true);
-    } else if (m.type === 'link-disabled') {
-      live = false;
-      setStatus('Disabled', 'bg-red-500');
-      showNotice('This link is burned or invalid. Ask for a fresh one.', true);
+      state = 'idle';
+      setStatus('Ended', 'bg-red-500');
+      showNotice('Stranger left — chat burned. Press Search to find someone new.', true);
+      sendBtn.disabled = true;
+    } else if (m.type === 'cancelled') {
+      showLanding();
+    } else if (m.type === 'username-required') {
+      state = 'idle';
+      showLanding();
+      nameError.classList.remove('hidden');
+      nameEl.focus();
     } else if (m.type === 'chat') {
       addMessage(m);
     }
+    // 'already-in-chat' / 'already-searching' need no UI change.
   };
 
-  // No auto-reconnect: one-time links must not resurrect after burn.
-  ws.onclose = () => { if (live) { live = false; setStatus('Disconnected', 'bg-red-500'); } };
+  ws.onclose = () => {
+    connected = false;
+    if (state === 'chatting') {
+      state = 'idle';
+      setStatus('Disconnected', 'bg-red-500');
+      showNotice('Connection lost — chat burned. Reconnect to search again.', true);
+      sendBtn.disabled = true;
+    } else {
+      showLanding();
+    }
+    setTimeout(connect, 3000); // reconnect the lobby socket; pairs never resurrect
+  };
   ws.onerror = () => { try { ws.close(); } catch {} };
 }
 
-$('createBtn').onclick = () => {
-  localStorage.setItem('relay-display-name', nameEl.value.trim());
-  roomId = null;
-  connect('create');
+searchBtn.onclick = () => {
+  if (!username()) { nameError.classList.remove('hidden'); nameEl.focus(); return; }
+  localStorage.setItem('relay-display-name', username());
+  ws.send(JSON.stringify({ type: 'search', username: username() }));
 };
 
-$('joinBtn').onclick = () => {
-  const v = joinInput.value.trim();
-  const m = v.match(/[?&]room=([0-9a-f]{8,64})/i) || v.match(/^([0-9a-f]{8,64})$/i);
-  const id = m ? m[1] : null;
-  if (!id) { alert('Paste a valid Relay link (…?room=…)'); return; }
-  roomId = id;
-  localStorage.setItem('relay-display-name', nameEl.value.trim());
-  history.replaceState(null, '', `?room=${roomId}`);
-  connect('join');
+$('cancelBtn').onclick = () => {
+  try { ws.send(JSON.stringify({ type: 'cancel' })); } catch {}
+  showLanding();
 };
 
-$('copyBtn').onclick = async () => {
-  try { await navigator.clipboard.writeText(linkBox.value); $('copyBtn').textContent = 'Copied!'; }
-  catch { linkBox.select(); document.execCommand('copy'); }
-  setTimeout(() => ($('copyBtn').textContent = 'Copy'), 1500);
+$('skipBtn').onclick = () => {
+  // One click: burn this pairing and auto-queue for the next stranger.
+  chat.innerHTML = '';
+  showSearching();
+  ws.send(JSON.stringify({ type: 'next', username: username() }));
 };
 
-$('newBtn').onclick = () => {
-  try { ws && ws.close(); } catch {}
-  location.href = location.pathname; // drop ?room=, back to landing
+$('leaveBtn').onclick = () => {
+  try { ws.send(JSON.stringify({ type: 'leave' })); } catch {}
+  chat.innerHTML = '';
+  showLanding();
 };
+
+nameEl.addEventListener('input', () => {
+  localStorage.setItem('relay-display-name', username());
+  refreshUI();
+});
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN || !live) return;
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN || state !== 'chatting') return;
   ws.send(JSON.stringify({ type: 'message', text }));
   input.value = '';
   input.focus();
 });
 
-// Deep link: ?room=xxx joins directly.
-if (roomId) connect('join');
-else setStatus('Idle', 'bg-slate-400');
+showLanding();
+connect();
 </script>
 </body>
 </html>
