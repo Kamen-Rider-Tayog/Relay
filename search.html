@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relay — searching…</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./assets/css/app.css?v=2">
+</head>
+<body class="min-h-screen flex justify-center p-4" style="background: linear-gradient(160deg, #fff7ed 0%, #ffedd5 45%, #fef3c7 100%); height: 100vh; height: 100dvh;">
+<div class="blob w-72 h-72 bg-orange-300 left-[-4rem] top-[-4rem]" aria-hidden="true"></div>
+<div class="blob w-80 h-80 bg-amber-200 right-[-5rem] bottom-[-5rem]" aria-hidden="true"></div>
+
+<div class="page-in relative z-10 w-full max-w-xl bg-white/95 rounded-[2rem] shadow-[0_20px_60px_-15px_rgba(194,120,20,.35)] border-4 border-white flex flex-col overflow-hidden" style="height: calc(100vh - 2rem); height: calc(100dvh - 2rem); max-height: 860px;">
+
+  <header class="px-5 py-3.5 bg-white border-b-2 border-orange-100 flex items-center gap-3 flex-wrap">
+    <a href="./index.html" class="text-xs font-extrabold px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 border-2 border-slate-200 hover:bg-slate-200 hover:text-slate-700 transition-all" aria-label="Back to front page">← Home</a>
+    <h1 class="font-display text-2xl font-extrabold tracking-tight flex-1 text-center">Relay</h1>
+    <div id="status" class="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+      <span id="dot" class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse inline-block"></span>
+      <span id="statusText">Searching…</span>
+    </div>
+  </header>
+
+  <!-- Searching -->
+  <section id="view-searching" class="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+    <div class="typing-bubble" aria-hidden="true">
+      <span class="search-dot"></span>
+      <span class="search-dot"></span>
+      <span class="search-dot"></span>
+    </div>
+    <p class="font-display text-2xl font-bold">Looking for a stranger…</p>
+    <p id="searchTimer" class="text-sm font-bold text-slate-400" role="timer">0s</p>
+    <p id="searchTip" class="text-sm font-semibold text-slate-500 max-w-xs">Tip: chats burn when anyone leaves — make the first hello count.</p>
+  </section>
+</div>
+
+<script type="module" src="./assets/js/search.js"></script>
+</body>
+</html>

@@ -126,7 +126,46 @@ function openSocket() {
     console.log(`lobby stats broadcast: ok (${stats.online} online)`);
     d.close();
 
-    anon.close(); b.close(); c.close();
+    // 8. Reunion handoff: matched pair carries a shared one-time token.
+    const e = track(await openSocket());
+    const f = track(await openSocket());
+    e.send(JSON.stringify({ type: 'search', username: 'Erin' }));
+    f.send(JSON.stringify({ type: 'search', username: 'Frank' }));
+    const [mE, mF] = await Promise.all([onceType(e, 'matched'), onceType(f, 'matched')]);
+    if (!mE.reunion || mE.reunion !== mF.reunion) {
+      throw new Error('matched missing shared reunion token');
+    }
+    console.log('matched carries reunion token: ok');
+
+    // 9. Both navigate (sockets die, room burns), then re-pair via token.
+    e.close();
+    f.close();
+    await wait(600); // let the server burn the abandoned room
+    const g = track(await openSocket());
+    const h = track(await openSocket());
+    const rejoinP = onceType(g, 'rejoining');
+    g.send(JSON.stringify({ type: 'search', username: 'Erin', reunion: mE.reunion }));
+    await rejoinP;
+    h.send(JSON.stringify({ type: 'search', username: 'Frank', reunion: mE.reunion }));
+    const [mG, mH] = await Promise.all([onceType(g, 'matched'), onceType(h, 'matched')]);
+    if (mG.peer !== 'Frank' || mH.peer !== 'Erin') {
+      throw new Error(`reunion re-pair wrong: ${mG.peer} / ${mH.peer}`);
+    }
+    console.log('page-navigation reunion re-pair: ok');
+    const chatP2 = onceType(h, 'chat');
+    g.send(JSON.stringify({ type: 'message', text: 'still here' }));
+    const chat2 = await chatP2;
+    if (chat2.text !== 'still here') throw new Error('post-reunion relay mismatch');
+    console.log('post-reunion message relay: ok');
+
+    // 10. Spent tokens are single-use: reuse falls back to the queue.
+    const i = track(await openSocket());
+    const reuseSearchingP = onceType(i, 'searching');
+    i.send(JSON.stringify({ type: 'search', username: 'Ivy', reunion: mE.reunion }));
+    await reuseSearchingP;
+    console.log('spent reunion token falls back to queue: ok');
+
+    anon.close(); b.close(); c.close(); g.close(); h.close(); i.close();
     console.log('SMOKE_PASSED');
   } catch (err) {
     failed = err;

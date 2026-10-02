@@ -38,6 +38,14 @@ jobs:
       - name: Required files present
         run: |
           test -f index.html || (echo "index.html missing" && exit 1)
+          test -f search.html || (echo "search.html missing" && exit 1)
+          test -f chat.html || (echo "chat.html missing" && exit 1)
+          test -f assets/css/app.css || (echo "assets/css/app.css missing" && exit 1)
+          test -f assets/js/relay.js || (echo "assets/js/relay.js missing" && exit 1)
+          test -f assets/js/ui.js || (echo "assets/js/ui.js missing" && exit 1)
+          test -f assets/js/landing.js || (echo "assets/js/landing.js missing" && exit 1)
+          test -f assets/js/search.js || (echo "assets/js/search.js missing" && exit 1)
+          test -f assets/js/chat.js || (echo "assets/js/chat.js missing" && exit 1)
           test -f package.json || (echo "package.json missing" && exit 1)
           test -f server.js || (echo "server.js missing" && exit 1)
           test -f .nojekyll || (echo ".nojekyll missing (needed for Pages)" && exit 1)
@@ -46,14 +54,16 @@ jobs:
       - name: Frontend sanity checks
         run: |
           grep -q 'id="view-landing"' index.html || (echo "landing view missing" && exit 1)
-          grep -q 'id="view-searching"' index.html || (echo "searching view missing" && exit 1)
-          grep -q 'id="view-chat"' index.html || (echo "chat view missing" && exit 1)
-          grep -q 'id="chat"' index.html || (echo "chat element missing" && exit 1)
           grep -q 'id="searchBtn"' index.html || (echo "search button missing" && exit 1)
-          grep -q 'id="skipBtn"' index.html || (echo "skip button missing" && exit 1)
-          grep -q 'username-required' index.html || (echo "username gate missing" && exit 1)
-          if grep -q '?room=' index.html; then echo "stale private-link code still present" && exit 1; fi
-          if grep -q "'Anonymous'" index.html server.js; then echo "Anonymous fallback still present" && exit 1; fi
+          grep -q 'id="view-searching"' search.html || (echo "searching view missing" && exit 1)
+          grep -q 'typing-bubble' search.html || (echo "typing indicator missing" && exit 1)
+          grep -q 'id="view-chat"' chat.html || (echo "chat view missing" && exit 1)
+          grep -q 'id="chat"' chat.html || (echo "chat element missing" && exit 1)
+          grep -q 'id="skipBtn"' chat.html || (echo "skip button missing" && exit 1)
+          grep -q 'username-required' index.html search.html chat.html assets/js/*.js || (echo "username gate missing" && exit 1)
+          grep -q 'reunion' server.js assets/js/search.js assets/js/chat.js || (echo "reunion handoff missing" && exit 1)
+          if grep -q '?room=' *.html assets/js/*.js; then echo "stale private-link code still present" && exit 1; fi
+          if grep -q "'Anonymous'" *.html assets/js/*.js server.js; then echo "Anonymous fallback still present" && exit 1; fi
 
       - name: No secrets committed
         run: |
@@ -77,7 +87,8 @@ jobs:
       - name: Assemble static artifact
         run: |
           mkdir -p public
-          cp index.html public/
+          cp index.html search.html chat.html public/
+          cp -r assets public/
           cp .nojekyll public/
 
       - uses: actions/upload-pages-artifact@v3

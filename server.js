@@ -17,6 +17,15 @@ const PORT = process.env.PORT || 8080;
 const rooms = new Map();
 // FIFO queue of sockets waiting for a stranger.
 const waiting = [];
+// Handoff tokens: token -> { arrived: [ws], timer }. Lets both strangers
+// survive the search.html -> chat.html navigation (which drops sockets)
+// and re-pair within REUNION_TTL. One-time use, unguessable, short-lived.
+const reunions = new Map();
+const REUNION_TTL = 12000;
+
+function newToken() {
+  return crypto.randomBytes(8).toString('hex');
+}
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -49,6 +58,42 @@ function broadcastStats() {
   }
 }
 
+// Pair two waiters into a fresh ephemeral room. Each side also gets a
+// one-time reunion token so the search -> chat page navigation (which
+// drops both sockets and burns this room) can re-form the same pairing.
+function pair(a, b) {
+  const roomId = crypto.randomBytes(8).toString('hex');
+  rooms.set(roomId, new Set([a, b]));
+  a.roomId = roomId;
+  b.roomId = roomId;
+  a.reunionWait = null;
+  b.reunionWait = null;
+  const reunion = newToken();
+  reunions.set(reunion, {
+    arrived: [],
+    timer: setTimeout(() => expireReunion(reunion), REUNION_TTL),
+  });
+  console.log(`[+] matched ${a.username} <> ${b.username} (${roomId})`);
+  send(a, { type: 'matched', peer: b.username, count: 2, reunion });
+  send(b, { type: 'matched', peer: a.username, count: 2, reunion });
+}
+
+// A handoff token expired before both strangers re-arrived: park
+// survivors back into the normal queue instead of stranding them.
+function expireReunion(token) {
+  const rec = reunions.get(token);
+  if (!rec) return;
+  reunions.delete(token);
+  for (const ws of rec.arrived) {
+    ws.reunionWait = null;
+    if (ws.readyState !== 1 || ws.roomId || isInQueue(ws)) continue;
+    waiting.push(ws);
+    send(ws, { type: 'searching' });
+  }
+  console.log(`[~] reunion ${token} expired, survivors re-queued`);
+  tryMatch();
+}
+
 // Pair two waiters into a fresh ephemeral room.
 function tryMatch() {
   while (waiting.length >= 2) {
@@ -60,13 +105,7 @@ function tryMatch() {
       if (b.readyState === 1 && !b.roomId) waiting.unshift(b);
       continue;
     }
-    const roomId = crypto.randomBytes(8).toString('hex');
-    rooms.set(roomId, new Set([a, b]));
-    a.roomId = roomId;
-    b.roomId = roomId;
-    console.log(`[+] matched ${a.username} <> ${b.username} (${roomId})`);
-    send(a, { type: 'matched', peer: b.username, count: 2 });
-    send(b, { type: 'matched', peer: a.username, count: 2 });
+    pair(a, b);
   }
   broadcastStats();
 }
@@ -83,24 +122,37 @@ function burnRoom(roomId, survivor, reason) {
   broadcastStats();
 }
 
-function serveIndex(res) {
-  try {
-    const html = fs.readFileSync(path.join(__dirname, 'index.html'));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(html);
-  } catch {
-    res.writeHead(500);
-    res.end('index.html missing\n');
-  }
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+};
+// Pages + shared assets served locally (Pages serves the same tree).
+const PAGES = new Set(['/', '/index.html', '/search.html', '/chat.html']);
+
+function serveStatic(req, res) {
+  const url = new URL(req.url, 'http://x');
+  if (url.pathname === '/health') { res.writeHead(200); res.end('ok'); return; }
+  if (req.method !== 'GET') { res.writeHead(405); res.end('method not allowed\n'); return; }
+  let rel;
+  if (url.pathname === '/') rel = 'index.html';
+  else if (PAGES.has(url.pathname)) rel = url.pathname.slice(1);
+  else if (url.pathname.startsWith('/assets/')) rel = url.pathname.slice(1);
+  else { res.writeHead(404); res.end('not found\n'); return; }
+  const abs = path.normalize(path.join(__dirname, rel));
+  if (!abs.startsWith(__dirname + path.sep)) { res.writeHead(403); res.end('forbidden\n'); return; }
+  const ext = path.extname(abs).toLowerCase();
+  if (!MIME[ext]) { res.writeHead(403); res.end('forbidden\n'); return; }
+  fs.readFile(abs, (err, data) => {
+    if (err) { res.writeHead(404); res.end('not found\n'); return; }
+    res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'public, max-age=300' });
+    res.end(data);
+  });
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
-  if (url.pathname === '/health') { res.writeHead(200); res.end('ok'); return; }
-  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    serveIndex(res);
-    return;
-  }
+  if (req.url === '/health') { res.writeHead(200); res.end('ok'); return; }
+  if (req.method === 'GET') return serveStatic(req, res);
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Relay WS server. Connect via WebSocket.\n');
 });
@@ -110,6 +162,7 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
   ws.roomId = null;
   ws.username = null;
+  ws.reunionWait = null;
   broadcastStats();
 
   ws.on('message', (raw) => {
@@ -118,12 +171,47 @@ wss.on('connection', (ws) => {
     if (!msg || typeof msg.type !== 'string') return;
 
     // --- Search for a random stranger ---------------------------------
+    // Optional `reunion` token: re-pairs both strangers after the
+    // search -> chat page navigation dropped their sockets. Falls back
+    // to the normal queue when the token is unknown or expired.
     if (msg.type === 'search') {
       const username = cleanUsername(msg.username);
       if (!username) { send(ws, { type: 'username-required' }); return; }
       if (ws.roomId) { send(ws, { type: 'already-in-chat' }); return; }
-      if (isInQueue(ws)) { send(ws, { type: 'searching' }); return; }
       ws.username = username;
+      const token = typeof msg.reunion === 'string' ? msg.reunion : null;
+      const rec = token ? reunions.get(token) : null;
+      if (rec) {
+        if (rec.arrived.includes(ws)) { send(ws, { type: 'rejoining' }); return; }
+        removeFromQueue(ws);
+        rec.arrived.push(ws);
+        ws.reunionWait = token;
+        if (rec.arrived.length >= 2) {
+          clearTimeout(rec.timer);
+          reunions.delete(token);
+          const [a, b] = rec.arrived;
+          a.reunionWait = null;
+          b.reunionWait = null;
+          if (a.readyState === 1 && b.readyState === 1 && !a.roomId && !b.roomId) {
+            console.log(`[~] reunion ${token} re-paired ${a.username} <> ${b.username}`);
+            pair(a, b);
+          } else {
+            for (const s of [a, b]) {
+              if (s.readyState === 1 && !s.roomId && !isInQueue(s)) {
+                waiting.push(s);
+                send(s, { type: 'searching' });
+              }
+            }
+            tryMatch();
+          }
+        } else {
+          console.log(`[~] ${username} rejoining (1/2)`);
+          send(ws, { type: 'rejoining' });
+        }
+        return;
+      }
+      if (isInQueue(ws)) { send(ws, { type: 'searching' }); return; }
+      ws.reunionWait = null; // abandon any stale handoff wait
       waiting.push(ws);
       console.log(`[?] ${username} searching (${waiting.length} waiting)`);
       send(ws, { type: 'searching' });
@@ -136,6 +224,7 @@ wss.on('connection', (ws) => {
       const username = cleanUsername(msg.username || ws.username);
       if (!username) { send(ws, { type: 'username-required' }); return; }
       ws.username = username;
+      ws.reunionWait = null;
       if (ws.roomId) {
         const roomId = ws.roomId;
         const peers = rooms.get(roomId) || new Set();
@@ -157,6 +246,7 @@ wss.on('connection', (ws) => {
     // --- Leave current chat without searching again ------------------------
     if (msg.type === 'leave') {
       removeFromQueue(ws);
+      ws.reunionWait = null;
       if (ws.roomId) {
         const roomId = ws.roomId;
         const peers = rooms.get(roomId) || new Set();
@@ -201,6 +291,9 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     removeFromQueue(ws);
+    // Handoff records outlive navigation disconnects on purpose: the
+    // REUNION_TTL timer moves stranded partners back to the queue.
+    ws.reunionWait = null;
     // ANY disconnect burns the pairing permanently — no rejoin.
     if (ws.roomId) {
       const roomId = ws.roomId;
